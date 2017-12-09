@@ -16,10 +16,12 @@
 
 import java.awt.*;
 import java.awt.event.*;
-import java.io.*;
 import javax.swing.*;
 import java.util.*;
 import java.lang.*;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CyclicBarrier;
 
 public class SSSP {
     private static int n = 50;              // default number of vertices
@@ -28,7 +30,7 @@ public class SSSP {
     private static int degree = 5;          // expected number of neighbors per vertex
                                             // (near the middle of the graph)
     private static long sd = 0;             // default random number seed
-    private static int numThreads = 0;      // zero means use Dijkstra's alg;
+    public static int numThreads = 0;       // zero means use Dijkstra's alg;
                                             // positive means use Delta stepping
 
     private static final int TIMING_ONLY    = 0;
@@ -587,9 +589,10 @@ class Surface {
 
     int numBuckets;
     int delta;
-    private ArrayList<LinkedHashSet<Vertex>> buckets;
+    private ArrayList<ArrayList<LinkedHashSet<Vertex>>> bucketsArr;
     // This is an ArrayList instead of a plain array to avoid the generic
     // array creation error message that stems from Java erasure.
+    private ArrayList<ArrayList<ConcurrentLinkedQueue<Request>>> messageQueues;
 
     // A Request is a potential relaxation.
     //
@@ -600,7 +603,8 @@ class Surface {
         // To relax a request is to consider whether the e might provide
         // v with a better path back to the source.
         //
-        public void relax() throws Coordinator.KilledException {
+        public void relax(int threadID) throws Coordinator.KilledException {
+            ArrayList<LinkedHashSet<Vertex>> buckets = bucketsArr.get(threadID);
             Vertex o = e.other(v);
             long altDist = o.distToSource + e.weight;
             if (altDist < v.distToSource) {
@@ -636,6 +640,85 @@ class Surface {
         return rtn;
     }
 
+
+    LinkedList<Request> findRequests(Collection<Vertex> bucket) {
+        LinkedList<Request> rtn = new LinkedList<Request>();
+        for (Vertex v : bucket) {
+            for (Edge e : v.neighbors) {
+                Vertex o = e.other(v);
+                rtn.add(new Request(o, e));
+            }
+        }
+        return rtn;
+    }
+
+    class ConcurrentRelax implements Runnable {
+        CyclicBarrier barrier;
+        private ArrayList<LinkedHashSet<Vertex>> buckets;
+        private int progress;      // ith buckets
+        private int index;
+
+        public ConcurrentRelax(int index, int progress, CyclicBarrier cb) {
+            this.buckets = bucketsArr.get(index);       // buckets belongs to this thread
+            this.progress = progress;          // ith bucket
+            this.index = index;         // thread id
+            this.barrier = cb;
+        }
+
+        private boolean allMQisEmpty() {
+            for (int i = 0; i < SSSP.numThreads; i++) {
+                for (int j = 0; j < SSSP.numThreads; j++) {
+                    if (!messageQueues.get(i).get(j).isEmpty()) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public void run() {
+            LinkedList<Vertex> removed = new LinkedList<Vertex>();
+            LinkedList<Request> requests;
+            System.out.println("run - " + index);
+            do {
+                System.out.println("run - " + index + " ");
+                // receive from msg queue
+                for (int i = 0; i < SSSP.numThreads; i++) {
+                    // get from mq[sender][receiver]
+                    ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(i).get(index);
+                    while (!concurrentLinkedQueue.isEmpty()) {
+                        // get and delete from mq
+                        Request curr = concurrentLinkedQueue.poll();
+                        try {
+                            curr.relax(index);
+                        } catch(Coordinator.KilledException e) { }
+                    }
+                }
+
+                requests = findRequests(buckets.get(progress));
+
+                // Move all vertices from bucket i to removed list.
+                removed.addAll(buckets.get(progress));
+                buckets.set(progress, new LinkedHashSet<Vertex>());
+                for (Request req : requests) {
+                    // Send message
+                    messageQueues.get(index).get(req.v.hashCode() % SSSP.numThreads).add(req);
+                }
+
+                // wait until other threads also reach here
+                try {
+                    System.out.println("await - " + index);
+                    barrier.await();
+                } catch (InterruptedException | BrokenBarrierException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("after await - " + index);
+
+            } while (!allMQisEmpty());
+        }
+    }
+
     // Main solver routine.
     //
     public void DeltaSolve() throws Coordinator.KilledException {
@@ -644,34 +727,49 @@ class Surface {
         // All buckets, together, cover a range of 2 * maxCoord,
         // which is larger than the weight of any edge, so a relaxation
         // will never wrap all the way around the array.
-        buckets = new ArrayList<LinkedHashSet<Vertex>>(numBuckets);
-        for (int i = 0; i < numBuckets; ++i) {
-            buckets.add(new LinkedHashSet<Vertex>());
+        bucketsArr = new ArrayList<>();
+
+        // allocate 2-D buckets array
+        for (int i = 0; i < SSSP.numThreads; i++) {
+            ArrayList<LinkedHashSet<Vertex>> buckets = new ArrayList<LinkedHashSet<Vertex>>(numBuckets);
+            for (int j = 0; j < numBuckets; ++j) {
+                buckets.add(new LinkedHashSet<Vertex>());
+            }
+            bucketsArr.add(buckets);
         }
-        buckets.get(0).add(vertices[0]);
+        bucketsArr.get(0).get(0).add(vertices[0]);
+
+        // allocate 2-D concurrent queue
+        messageQueues = new ArrayList<>();
+        for (int i = 0; i < SSSP.numThreads; i++) {
+            ArrayList<ConcurrentLinkedQueue<Request>> mq_1d = new ArrayList<>();
+            for (int j = 0; j < SSSP.numThreads; j++) {
+                mq_1d.add(new ConcurrentLinkedQueue<>());
+            }
+            messageQueues.add(mq_1d);
+        }
+
         int i = 0;
+        Thread[] threads = new Thread[SSSP.numThreads];
+        CyclicBarrier cb = new CyclicBarrier(SSSP.numThreads);
         for (;;) {
-            LinkedList<Vertex> removed = new LinkedList<Vertex>();
-            LinkedList<Request> requests;
-            while (buckets.get(i).size() > 0) {
-                requests = findRequests(buckets.get(i), true);  // light relaxations
-                // Move all vertices from bucket i to removed list.
-                removed.addAll(buckets.get(i));
-                buckets.set(i, new LinkedHashSet<Vertex>());
-                for (Request req : requests) {
-                    req.relax();
+            for (int t = 0; t < SSSP.numThreads; t++) {
+                threads[t] = new Thread(new ConcurrentRelax(t, i, cb));
+                threads[t].start();
+            }
+            for (int t = 0; t < SSSP.numThreads; t++) {
+                try {
+                    threads[t].join();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
                 }
             }
-            // Now bucket i is empty.
-            requests = findRequests(removed, false);    // heavy relaxations
-            for (Request req : requests) {
-                req.relax();
-            }
+
             // Find next nonempty bucket.
             int j = i;
             do {
                 j = (j + 1) % numBuckets;
-            } while (j != i && buckets.get(j).size() == 0);
+            } while (j != i && bucketsArr.get(0).get(j).size() == 0);
             if (i == j) {
                 // Cycled all the way around; we're done
                 break;  // for (;;) loop
