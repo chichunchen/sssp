@@ -640,7 +640,6 @@ class Surface {
         return rtn;
     }
 
-
     LinkedList<Request> findRequests(Collection<Vertex> bucket) {
         LinkedList<Request> rtn = new LinkedList<Request>();
         for (Vertex v : bucket) {
@@ -652,17 +651,17 @@ class Surface {
         return rtn;
     }
 
+    // TODO describe this class
     class ConcurrentRelax implements Runnable {
         CyclicBarrier barrier;
-        CyclicBarrier barrier2;
         private Vector<LinkedHashSet<Vertex>> buckets;
         private int progress;      // ith buckets
         private int index;
 
-        public ConcurrentRelax(int index, int progress, CyclicBarrier cb, CyclicBarrier cb2) {
+        public ConcurrentRelax(int index, int progress, CyclicBarrier cb) {
             this.buckets = bucketsArr.get(index);       // buckets belongs to this thread
-            this.progress = progress;          // ith bucket
-            this.index = index;         // thread id
+            this.progress = progress;                   // ith bucket
+            this.index = index;                         // thread id
             this.barrier = cb;
         }
 
@@ -681,15 +680,12 @@ class Surface {
         public void run() {
             LinkedList<Vertex> removed = new LinkedList<Vertex>();
             LinkedList<Request> requests;
-            System.out.println("run - " + index);
             do {
                 try {
-                    System.out.println("await - " + index);
                     barrier.await();
                 } catch (InterruptedException | BrokenBarrierException e) {
                     e.printStackTrace();
                 }
-                System.out.println("after await - " + index);
                 // receive from msg queue
                 for (int i = 0; i < SSSP.numThreads; i++) {
                     // get from mq[sender][receiver]
@@ -703,12 +699,10 @@ class Surface {
                     }
                 }
                 try {
-                    System.out.println("await - " + index);
                     barrier.await();
                 } catch (InterruptedException | BrokenBarrierException e) {
                     e.printStackTrace();
                 }
-                System.out.println("after await - " + index);
 
                 requests = findRequests(buckets.get(progress), true);
                 // Move all vertices from bucket i to removed list.
@@ -721,33 +715,27 @@ class Surface {
 
                 // wait until other threads also reach here
                 try {
-                    System.out.println("await - " + index);
                     barrier.await();
                 } catch (InterruptedException | BrokenBarrierException e) {
                     e.printStackTrace();
                 }
-                System.out.println("after await - " + index);
-
             } while (!allMQisEmpty());
-           
+
             // Now bucket i is empty.
             requests = findRequests(removed, false);    // heavy relaxations
             for (Request req : requests) {
                 try {
                     req.relax(index);
-                } catch(Coordinator.KilledException e) { }
+                } catch(Coordinator.KilledException e) {
+                    e.printStackTrace();
+                }
             }
-            
-            
+
             try {
-                System.out.println("await - " + index);
-                barrier2.await();
+                barrier.await();
             } catch (InterruptedException | BrokenBarrierException e) {
                 e.printStackTrace();
             }
-            System.out.println("after await - " + index);
-
-
         }
     }
 
@@ -784,10 +772,9 @@ class Surface {
         int i = 0;
         Thread[] threads = new Thread[SSSP.numThreads];
         CyclicBarrier cb = new CyclicBarrier(SSSP.numThreads);
-        CyclicBarrier cb2 = new CyclicBarrier(SSSP.numThreads);
         for (;;) {
             for (int t = 0; t < SSSP.numThreads; t++) {
-                threads[t] = new Thread(new ConcurrentRelax(t, i, cb, cb2));
+                threads[t] = new Thread(new ConcurrentRelax(t, i, cb));
                 threads[t].start();
             }
             for (int t = 0; t < SSSP.numThreads; t++) {
@@ -799,15 +786,18 @@ class Surface {
             }
 
             // Find next nonempty bucket.
-            int j = i;
-            do {
-                j = (j + 1) % numBuckets;
-            } while (j != i && bucketsArr.get(0).get(j).size() == 0);
-            if (i == j) {
-                // Cycled all the way around; we're done
-                break;  // for (;;) loop
-            }
-            i = j;
+            if (i == numBuckets-1)
+                break;
+            i++;
+//            int j = i;
+//            do {
+//                j = (j + 1) % numBuckets;
+//            } while (j != i && bucketsArr.get(0).get(j).size() == 0);
+//            if (i == j) {
+//                // Cycled all the way around; we're done
+//                break;  // for (;;) loop
+//            }
+//            i = j;
         }
     }
 
