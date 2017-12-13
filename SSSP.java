@@ -589,7 +589,7 @@ class Surface {
 
     int numBuckets;
     int delta;
-    private ArrayList<ArrayList<LinkedHashSet<Vertex>>> bucketsArr;
+    private Vector<Vector<LinkedHashSet<Vertex>>> bucketsArr;
     // This is an ArrayList instead of a plain array to avoid the generic
     // array creation error message that stems from Java erasure.
     private ArrayList<ArrayList<ConcurrentLinkedQueue<Request>>> messageQueues;
@@ -604,7 +604,7 @@ class Surface {
         // v with a better path back to the source.
         //
         public void relax(int threadID) throws Coordinator.KilledException {
-            ArrayList<LinkedHashSet<Vertex>> buckets = bucketsArr.get(threadID);
+            Vector<LinkedHashSet<Vertex>> buckets = bucketsArr.get(threadID);
             Vertex o = e.other(v);
             long altDist = o.distToSource + e.weight;
             if (altDist < v.distToSource) {
@@ -655,7 +655,7 @@ class Surface {
     class ConcurrentRelax implements Runnable {
         CyclicBarrier barrier;
         CyclicBarrier barrier2;
-        private ArrayList<LinkedHashSet<Vertex>> buckets;
+        private Vector<LinkedHashSet<Vertex>> buckets;
         private int progress;      // ith buckets
         private int index;
 
@@ -684,6 +684,13 @@ class Surface {
             LinkedList<Request> requests;
             System.out.println("run - " + index);
             do {
+                try {
+                    System.out.println("await - " + index);
+                    barrier.await();
+                } catch (InterruptedException | BrokenBarrierException e) {
+                    e.printStackTrace();
+                }
+                System.out.println("after await - " + index);
                 // receive from msg queue
                 for (int i = 0; i < SSSP.numThreads; i++) {
                     // get from mq[sender][receiver]
@@ -724,7 +731,7 @@ class Surface {
                 System.out.println("after await - " + index);
 
             } while (!allMQisEmpty());
-            
+           
             // Now bucket i is empty.
             requests = findRequests(removed, false);    // heavy relaxations
             for (Request req : requests) {
@@ -732,6 +739,8 @@ class Surface {
                     req.relax(index);
                 } catch(Coordinator.KilledException e) { }
             }
+            
+            
             try {
                 System.out.println("await - " + index);
                 barrier2.await();
@@ -739,6 +748,7 @@ class Surface {
                 e.printStackTrace();
             }
             System.out.println("after await - " + index);
+
 
         }
     }
@@ -751,11 +761,11 @@ class Surface {
         // All buckets, together, cover a range of 2 * maxCoord,
         // which is larger than the weight of any edge, so a relaxation
         // will never wrap all the way around the array.
-        bucketsArr = new ArrayList<>();
+        bucketsArr = new Vector<>();
 
         // allocate 2-D buckets array
         for (int i = 0; i < SSSP.numThreads; i++) {
-            ArrayList<LinkedHashSet<Vertex>> buckets = new ArrayList<LinkedHashSet<Vertex>>(numBuckets);
+            Vector<LinkedHashSet<Vertex>> buckets = new Vector<LinkedHashSet<Vertex>>(numBuckets);
             for (int j = 0; j < numBuckets; ++j) {
                 buckets.add(new LinkedHashSet<Vertex>());
             }
