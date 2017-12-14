@@ -564,7 +564,7 @@ class Surface {
     // *************************
     // Find shortest paths via Dijkstra's algorithm.
     //
-    public void DijkstraSolve() throws Coordinator.KilledException {
+	public void DijkstraSolve() throws Coordinator.KilledException {
         PriorityQueue<Vertex> pq = new PriorityQueue<Vertex>(n, new DistanceComparator());
         Vertex v = vertices[0];
         for (Edge e : v.neighbors) {
@@ -665,23 +665,32 @@ class Surface {
 
     // This class is for speed up delta-stepping algorithm
     class ConcurrentRelax implements Runnable {
-        CyclicBarrier barrier;
+        private CyclicBarrier barrier;
         private Vector<LinkedHashSet<Vertex>> buckets;
         private int progress;      // ith buckets
-        private int index;
+        private int tid;
 
-        public ConcurrentRelax(int index, int progress, CyclicBarrier cb) {
-            this.buckets = bucketsArr.get(index);       // buckets belongs to this thread
-            this.progress = progress;                   // ith bucket
-            this.index = index;                         // thread id
+        public ConcurrentRelax(int tid, CyclicBarrier cb) {
+            this.buckets = bucketsArr.get(tid);         // buckets belongs to this thread
+            this.progress = 0;                          // start from 0th bucket
+            this.tid = tid;                             // thread id
             this.barrier = cb;
         }
 
-        // 
+        // return true if all the messageQueues is empty, otherwise, return false
         private boolean allMQisEmpty() {
-            for (int i = 0; i < SSSP.numThreads; i++) {
-                if (!messageQueues.get(i).isEmpty()) {
+            for (ConcurrentLinkedQueue<Request> mq : messageQueues)
+                if (!mq.isEmpty())
                     return false;
+            return true;
+        }
+
+        // return true if bucketsArr have no bucket size is not 0
+        private boolean check2DbucketsIsEmpty() {
+            for (Vector<LinkedHashSet<Vertex>> bs : bucketsArr) {
+                for (LinkedHashSet<Vertex> b : bs) {
+                    if (!b.isEmpty())
+                        return false;
                 }
             }
             return true;
@@ -701,12 +710,12 @@ class Surface {
                     }
                     // receive from msg queue
                     // get from mq[sender][receiver]
-                    ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(index);
+                    ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(tid);
                     while (!concurrentLinkedQueue.isEmpty()) {
                         // get and delete from mq
                         Request curr = concurrentLinkedQueue.poll();
                         try {
-                            curr.relax(index);
+                            curr.relax(tid);
                         } catch(Coordinator.KilledException e) { }
                     }
 
@@ -721,7 +730,6 @@ class Surface {
                     removed.addAll(buckets.get(progress));
                     buckets.set(progress, new LinkedHashSet<Vertex>());
                     for (Request req : requests) {
-                        // Send message
                         messageQueues.get(req.v.hashCode() % SSSP.numThreads).add(req);
                     }
 
@@ -733,87 +741,89 @@ class Surface {
                     }
                 } while (!allMQisEmpty());
 
+                try {
+                    barrier.await();
+                } catch (InterruptedException | BrokenBarrierException e) {
+                    e.printStackTrace();
+                }
+
                 // Now bucket i is empty.
                 requests = findRequests(removed, false);    // heavy relaxations
                 for (Request req : requests) {
                     try {
-                        req.relax(index);
+                        req.relax(tid);
                     } catch(Coordinator.KilledException e) {
                         e.printStackTrace();
                     }
                 }
 
-//                 try {
-//                     barrier.await();
-//                 } catch (InterruptedException | BrokenBarrierException e) {
-//                     e.printStackTrace();
-//                 }
+                try {
+                    barrier.await();
+                } catch (InterruptedException | BrokenBarrierException e) {
+                    e.printStackTrace();
+                }
 
                 // Find next nonempty bucket.
                 if (progress == numBuckets-1) {
-                    boolean finish = true;
-
-                    for (int j = 0; j < numBuckets; j++) {
-                        if (buckets.get(j).size() != 0) {
-                            finish = false;
-                        }
-                    }
-
-                    if (finish)
+                    if (check2DbucketsIsEmpty())
                         break;
                     else
                         progress = -1;
                 }
-
                 progress++;
             }
-
         }
     }
 
     // Main solver routine.
     //
     public void DeltaSolve() throws Coordinator.KilledException {
+        int numThreads = SSSP.numThreads;
         numBuckets = 2 * degree;
+
         // if delta has been manually configured
         if (delta == -1)
             delta = maxCoord / degree;
         else {
             numBuckets = maxCoord * 2 / delta;
         }
+
         // All buckets, together, cover a range of 2 * maxCoord,
         // which is larger than the weight of any edge, so a relaxation
         // will never wrap all the way around the array.
         bucketsArr = new Vector<>();
 
         // allocate 2-D buckets array
-        for (int i = 0; i < SSSP.numThreads; i++) {
+        for (int i = 0; i < numThreads; i++) {
             Vector<LinkedHashSet<Vertex>> buckets = new Vector<LinkedHashSet<Vertex>>(numBuckets);
             for (int j = 0; j < numBuckets; ++j) {
                 buckets.add(new LinkedHashSet<Vertex>());
             }
             bucketsArr.add(buckets);
         }
+        // initialize bucket
         bucketsArr.get(0).get(0).add(vertices[0]);
 
         // allocate concurrent queue by thread num
         messageQueues = new ArrayList<>();
-        for (int i = 0; i < SSSP.numThreads; i++) {
+        for (int i = 0; i < numThreads; i++) {
             ConcurrentLinkedQueue<Request> mq = new ConcurrentLinkedQueue<>();
             messageQueues.add(mq);
         }
 
-        int i = 0;
-        Thread[] threads = new Thread[SSSP.numThreads];
-        CyclicBarrier cb = new CyclicBarrier(SSSP.numThreads);
-        for (int t = 0; t < SSSP.numThreads; t++) {
-            threads[t] = new Thread(new ConcurrentRelax(t, i, cb));
+        Thread[] threads = new Thread[numThreads];
+        CyclicBarrier cb = new CyclicBarrier(numThreads);
+
+        // start running parallelized delta-stepping
+        for (int t = 0; t < numThreads; t++) {
+            threads[t] = new Thread(new ConcurrentRelax(t,  cb));
             threads[t].start();
         }
 
-        for (int t = 0; t < SSSP.numThreads; t++) {
+        // recycle all the threads
+        for (Thread t : threads) {
             try {
-                threads[t].join();
+                t.join();
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
