@@ -690,61 +690,85 @@ class Surface {
         public void run() {
             LinkedList<Vertex> removed = new LinkedList<>();
             LinkedList<Request> requests;
-            do {
-                try {
-                    barrier.await();
-                } catch (InterruptedException | BrokenBarrierException e) {
-                    e.printStackTrace();
-                }
-                // receive from msg queue
-                // get from mq[sender][receiver]
-                ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(index);
-                while (!concurrentLinkedQueue.isEmpty()) {
-                    // get and delete from mq
-                    Request curr = concurrentLinkedQueue.poll();
+
+            for (;;) {
+                do {
                     try {
-                        curr.relax(index);
-                    } catch(Coordinator.KilledException e) { }
-                }
+                        barrier.await();
+                    } catch (InterruptedException | BrokenBarrierException e) {
+                        e.printStackTrace();
+                    }
+                    // receive from msg queue
+                    // get from mq[sender][receiver]
+                    ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(index);
+                    while (!concurrentLinkedQueue.isEmpty()) {
+                        // get and delete from mq
+                        Request curr = concurrentLinkedQueue.poll();
+                        try {
+                            curr.relax(index);
+                        } catch(Coordinator.KilledException e) { }
+                    }
 
-                try {
-                    barrier.await();
-                } catch (InterruptedException | BrokenBarrierException e) {
-                    e.printStackTrace();
-                }
+                    try {
+                        barrier.await();
+                    } catch (InterruptedException | BrokenBarrierException e) {
+                        e.printStackTrace();
+                    }
 
-                requests = findRequests(buckets.get(progress), true);
-                // Move all vertices from bucket i to removed list.
-                removed.addAll(buckets.get(progress));
-                buckets.set(progress, new LinkedHashSet<Vertex>());
+                    requests = findRequests(buckets.get(progress), true);
+                    // Move all vertices from bucket i to removed list.
+                    removed.addAll(buckets.get(progress));
+                    buckets.set(progress, new LinkedHashSet<Vertex>());
+                    for (Request req : requests) {
+                        // Send message
+                        messageQueues.get(req.v.hashCode() % SSSP.numThreads).add(req);
+                    }
+
+                    // wait until other threads also reach here
+                    try {
+                        barrier.await();
+                    } catch (InterruptedException | BrokenBarrierException e) {
+                        e.printStackTrace();
+                    }
+                } while (!allMQisEmpty());
+
+                // Now bucket i is empty.
+                requests = findRequests(removed, false);    // heavy relaxations
                 for (Request req : requests) {
-                    // Send message
-                    messageQueues.get(req.v.hashCode() % SSSP.numThreads).add(req);
+                    try {
+                        req.relax(index);
+                    } catch(Coordinator.KilledException e) {
+                        e.printStackTrace();
+                    }
                 }
 
-                // wait until other threads also reach here
                 try {
                     barrier.await();
                 } catch (InterruptedException | BrokenBarrierException e) {
                     e.printStackTrace();
                 }
-            } while (!allMQisEmpty());
 
-            // Now bucket i is empty.
-            requests = findRequests(removed, false);    // heavy relaxations
-            for (Request req : requests) {
-                try {
-                    req.relax(index);
-                } catch(Coordinator.KilledException e) {
-                    e.printStackTrace();
+                // Find next nonempty bucket.
+                if (progress == numBuckets-1) {
+                    boolean finish = true;
+
+                    for (int t = 0; t < SSSP.numThreads; t++) {
+                        for (int j = 0; j < numBuckets; j++) {
+                            if (bucketsArr.get(t).get(j).size() != 0) {
+                                finish = false;
+                            }
+                        }
+                    }
+
+                    if (finish)
+                        break;
+                    else
+                        progress = -1;
                 }
+
+                progress++;
             }
 
-            try {
-                barrier.await();
-            } catch (InterruptedException | BrokenBarrierException e) {
-                e.printStackTrace();
-            }
         }
     }
 
@@ -783,38 +807,17 @@ class Surface {
         int i = 0;
         Thread[] threads = new Thread[SSSP.numThreads];
         CyclicBarrier cb = new CyclicBarrier(SSSP.numThreads);
-        for (;;) {
-            for (int t = 0; t < SSSP.numThreads; t++) {
-                threads[t] = new Thread(new ConcurrentRelax(t, i, cb));
-                threads[t].start();
+        for (int t = 0; t < SSSP.numThreads; t++) {
+            threads[t] = new Thread(new ConcurrentRelax(t, i, cb));
+            threads[t].start();
+        }
+
+        for (int t = 0; t < SSSP.numThreads; t++) {
+            try {
+                threads[t].join();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
-            for (int t = 0; t < SSSP.numThreads; t++) {
-                try {
-                    threads[t].join();
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-
-            // Find next nonempty bucket.
-            if (i == numBuckets-1) {
-                boolean finish = true;
-
-                for (int t = 0; t < SSSP.numThreads; t++) {
-                    for (int j = 0; j < numBuckets; j++) {
-                        if (bucketsArr.get(t).get(j).size() != 0) {
-                            finish = false;
-                        }
-                    }
-                }
-
-                if (finish)
-                    break;
-                else
-                    i = -1;
-            }
-
-            i++;
         }
     }
 
