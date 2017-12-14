@@ -677,6 +677,7 @@ class Surface {
             this.barrier = cb;
         }
 
+        // 
         private boolean allMQisEmpty() {
             for (int i = 0; i < SSSP.numThreads; i++) {
                 if (!messageQueues.get(i).isEmpty()) {
@@ -742,21 +743,19 @@ class Surface {
                     }
                 }
 
-                try {
-                    barrier.await();
-                } catch (InterruptedException | BrokenBarrierException e) {
-                    e.printStackTrace();
-                }
+//                 try {
+//                     barrier.await();
+//                 } catch (InterruptedException | BrokenBarrierException e) {
+//                     e.printStackTrace();
+//                 }
 
                 // Find next nonempty bucket.
                 if (progress == numBuckets-1) {
                     boolean finish = true;
 
-                    for (int t = 0; t < SSSP.numThreads; t++) {
-                        for (int j = 0; j < numBuckets; j++) {
-                            if (bucketsArr.get(t).get(j).size() != 0) {
-                                finish = false;
-                            }
+                    for (int j = 0; j < numBuckets; j++) {
+                        if (buckets.get(j).size() != 0) {
+                            finish = false;
                         }
                     }
 
