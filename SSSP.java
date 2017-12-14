@@ -784,20 +784,27 @@ class Surface {
                     e.printStackTrace();
                 }
             }
+            System.out.println("debug: " + i);
 
             // Find next nonempty bucket.
-            if (i == numBuckets-1)
-                break;
+            if (i == numBuckets-1) {
+                boolean finish = true;
+
+                for (int t = 0; t < SSSP.numThreads; t++) {
+                    for (int j = 0; j < numBuckets; j++) {
+                        if (bucketsArr.get(t).get(j).size() != 0) {
+                            finish = false;
+                        }
+                    }
+                }
+
+                if (finish)
+                    break;
+                else
+                    i = -1;
+            }
+
             i++;
-//            int j = i;
-//            do {
-//                j = (j + 1) % numBuckets;
-//            } while (j != i && bucketsArr.get(0).get(j).size() == 0);
-//            if (i == j) {
-//                // Cycled all the way around; we're done
-//                break;  // for (;;) loop
-//            }
-//            i = j;
         }
     }
 
