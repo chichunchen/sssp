@@ -32,6 +32,7 @@ public class SSSP {
     private static long sd = 0;             // default random number seed
     public static int numThreads = 0;       // zero means use Dijkstra's alg;
                                             // positive means use Delta stepping
+    public static int delta = -1;           // delta value for Delta stepping
 
     private static final int TIMING_ONLY    = 0;
     private static final int PRINT_EVENTS   = 1;
@@ -53,7 +54,8 @@ public class SSSP {
           + "-s <random number seed>\n"
           + "-t <number of threads>\n"
           + "    (0 means use Dijkstra's algorithm on one thread)\n"
-          + "-v  (print this message)\n";
+          + "-v  (print this message)\n"
+          + "-D <configure delta manually>\n";
 
     // Examine command-line arguments for alternative running modes.
     //
@@ -147,6 +149,16 @@ public class SSSP {
             } else if (args[i].equals("-v")) {
                 System.err.print(help);
                 System.exit(0);
+            } else if (args[i].equals("-D")) {
+                if (++i >= args.length) {
+                    System.err.print("Missing delta\n");
+                } else {
+                    try {
+                        delta = Integer.parseInt(args[i]);
+                    } catch (NumberFormatException e) {
+                        System.err.printf("Delta (%D) must be a double\n", args[i]);
+                    }
+                }
             } else {
                 System.err.printf("Unexpected argument: %s\n", args[i]);
                 System.err.print(help);
@@ -592,7 +604,7 @@ class Surface {
     private Vector<Vector<LinkedHashSet<Vertex>>> bucketsArr;
     // This is an ArrayList instead of a plain array to avoid the generic
     // array creation error message that stems from Java erasure.
-    private ArrayList<ArrayList<ConcurrentLinkedQueue<Request>>> messageQueues;
+    private ArrayList<ConcurrentLinkedQueue<Request>> messageQueues;
 
     // A Request is a potential relaxation.
     //
@@ -651,7 +663,7 @@ class Surface {
         return rtn;
     }
 
-    // TODO describe this class
+    // This class is for speed up delta-stepping algorithm
     class ConcurrentRelax implements Runnable {
         CyclicBarrier barrier;
         private Vector<LinkedHashSet<Vertex>> buckets;
@@ -667,10 +679,8 @@ class Surface {
 
         private boolean allMQisEmpty() {
             for (int i = 0; i < SSSP.numThreads; i++) {
-                for (int j = 0; j < SSSP.numThreads; j++) {
-                    if (!messageQueues.get(i).get(j).isEmpty()) {
-                        return false;
-                    }
+                if (!messageQueues.get(i).isEmpty()) {
+                    return false;
                 }
             }
             return true;
@@ -678,7 +688,7 @@ class Surface {
 
         @Override
         public void run() {
-            LinkedList<Vertex> removed = new LinkedList<Vertex>();
+            LinkedList<Vertex> removed = new LinkedList<>();
             LinkedList<Request> requests;
             do {
                 try {
@@ -687,17 +697,16 @@ class Surface {
                     e.printStackTrace();
                 }
                 // receive from msg queue
-                for (int i = 0; i < SSSP.numThreads; i++) {
-                    // get from mq[sender][receiver]
-                    ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(i).get(index);
-                    while (!concurrentLinkedQueue.isEmpty()) {
-                        // get and delete from mq
-                        Request curr = concurrentLinkedQueue.poll();
-                        try {
-                            curr.relax(index);
-                        } catch(Coordinator.KilledException e) { }
-                    }
+                // get from mq[sender][receiver]
+                ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(index);
+                while (!concurrentLinkedQueue.isEmpty()) {
+                    // get and delete from mq
+                    Request curr = concurrentLinkedQueue.poll();
+                    try {
+                        curr.relax(index);
+                    } catch(Coordinator.KilledException e) { }
                 }
+
                 try {
                     barrier.await();
                 } catch (InterruptedException | BrokenBarrierException e) {
@@ -710,7 +719,7 @@ class Surface {
                 buckets.set(progress, new LinkedHashSet<Vertex>());
                 for (Request req : requests) {
                     // Send message
-                    messageQueues.get(index).get(req.v.hashCode() % SSSP.numThreads).add(req);
+                    messageQueues.get(req.v.hashCode() % SSSP.numThreads).add(req);
                 }
 
                 // wait until other threads also reach here
@@ -743,7 +752,12 @@ class Surface {
     //
     public void DeltaSolve() throws Coordinator.KilledException {
         numBuckets = 2 * degree;
-        delta = maxCoord / degree;
+        // if delta has been manually configured
+        if (delta == -1)
+            delta = maxCoord / degree;
+        else {
+            numBuckets = maxCoord * 2 / delta;
+        }
         // All buckets, together, cover a range of 2 * maxCoord,
         // which is larger than the weight of any edge, so a relaxation
         // will never wrap all the way around the array.
@@ -759,14 +773,11 @@ class Surface {
         }
         bucketsArr.get(0).get(0).add(vertices[0]);
 
-        // allocate 2-D concurrent queue
+        // allocate concurrent queue by thread num
         messageQueues = new ArrayList<>();
         for (int i = 0; i < SSSP.numThreads; i++) {
-            ArrayList<ConcurrentLinkedQueue<Request>> mq_1d = new ArrayList<>();
-            for (int j = 0; j < SSSP.numThreads; j++) {
-                mq_1d.add(new ConcurrentLinkedQueue<>());
-            }
-            messageQueues.add(mq_1d);
+            ConcurrentLinkedQueue<Request> mq = new ConcurrentLinkedQueue<>();
+            messageQueues.add(mq);
         }
 
         int i = 0;
@@ -784,7 +795,6 @@ class Surface {
                     e.printStackTrace();
                 }
             }
-            System.out.println("debug: " + i);
 
             // Find next nonempty bucket.
             if (i == numBuckets-1) {
@@ -825,6 +835,9 @@ class Surface {
         edges = new Vector<Edge>();
 
         prn = new Random();
+
+        delta = SSSP.delta;
+
         reset();
     }
 }
