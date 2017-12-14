@@ -678,10 +678,11 @@ class Surface {
         }
 
         // return true if all the messageQueues is empty, otherwise, return false
-        private boolean allMQisEmpty() {
+        private boolean checkAllMQisEmpty() {
             for (ConcurrentLinkedQueue<Request> mq : messageQueues)
                 if (!mq.isEmpty())
                     return false;
+
             return true;
         }
 
@@ -693,6 +694,7 @@ class Surface {
                         return false;
                 }
             }
+
             return true;
         }
 
@@ -719,11 +721,11 @@ class Surface {
                         } catch(Coordinator.KilledException e) { }
                     }
 
-                    try {
-                        barrier.await();
-                    } catch (InterruptedException | BrokenBarrierException e) {
-                        e.printStackTrace();
-                    }
+//                    try {
+//                        barrier.await();
+//                    } catch (InterruptedException | BrokenBarrierException e) {
+//                        e.printStackTrace();
+//                    }
 
                     requests = findRequests(buckets.get(progress), true);
                     // Move all vertices from bucket i to removed list.
@@ -739,13 +741,13 @@ class Surface {
                     } catch (InterruptedException | BrokenBarrierException e) {
                         e.printStackTrace();
                     }
-                } while (!allMQisEmpty());
+                } while (!checkAllMQisEmpty());
 
-                try {
-                    barrier.await();
-                } catch (InterruptedException | BrokenBarrierException e) {
-                    e.printStackTrace();
-                }
+//                try {
+//                    barrier.await();
+//                } catch (InterruptedException | BrokenBarrierException e) {
+//                    e.printStackTrace();
+//                }
 
                 // Now bucket i is empty.
                 requests = findRequests(removed, false);    // heavy relaxations
