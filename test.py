@@ -3,9 +3,9 @@ import sys
 
 # print(sys.argv)
 N = int(sys.argv[1])
-d = sys.argv[2]
-S = int(sys.argv[3])
-t = sys.argv[4]
+d = sys.argv[2] or 10
+S = int(sys.argv[3]) or 0
+t = sys.argv[4] or 4
 
 for n in range(N, N+60):
     for s in range(S, S+60):
