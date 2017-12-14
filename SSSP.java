@@ -592,7 +592,7 @@ class Surface {
     private Vector<Vector<LinkedHashSet<Vertex>>> bucketsArr;
     // This is an ArrayList instead of a plain array to avoid the generic
     // array creation error message that stems from Java erasure.
-    private ArrayList<ArrayList<ConcurrentLinkedQueue<Request>>> messageQueues;
+    private ArrayList<ConcurrentLinkedQueue<Request>> messageQueues;
 
     // A Request is a potential relaxation.
     //
@@ -651,7 +651,7 @@ class Surface {
         return rtn;
     }
 
-    // TODO describe this class
+    // This class is for speed up delta-stepping algorithm
     class ConcurrentRelax implements Runnable {
         CyclicBarrier barrier;
         private Vector<LinkedHashSet<Vertex>> buckets;
@@ -667,10 +667,8 @@ class Surface {
 
         private boolean allMQisEmpty() {
             for (int i = 0; i < SSSP.numThreads; i++) {
-                for (int j = 0; j < SSSP.numThreads; j++) {
-                    if (!messageQueues.get(i).get(j).isEmpty()) {
-                        return false;
-                    }
+                if (!messageQueues.get(i).isEmpty()) {
+                    return false;
                 }
             }
             return true;
@@ -687,17 +685,16 @@ class Surface {
                     e.printStackTrace();
                 }
                 // receive from msg queue
-                for (int i = 0; i < SSSP.numThreads; i++) {
-                    // get from mq[sender][receiver]
-                    ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(i).get(index);
-                    while (!concurrentLinkedQueue.isEmpty()) {
-                        // get and delete from mq
-                        Request curr = concurrentLinkedQueue.poll();
-                        try {
-                            curr.relax(index);
-                        } catch(Coordinator.KilledException e) { }
-                    }
+                // get from mq[sender][receiver]
+                ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(index);
+                while (!concurrentLinkedQueue.isEmpty()) {
+                    // get and delete from mq
+                    Request curr = concurrentLinkedQueue.poll();
+                    try {
+                        curr.relax(index);
+                    } catch(Coordinator.KilledException e) { }
                 }
+
                 try {
                     barrier.await();
                 } catch (InterruptedException | BrokenBarrierException e) {
@@ -710,7 +707,7 @@ class Surface {
                 buckets.set(progress, new LinkedHashSet<Vertex>());
                 for (Request req : requests) {
                     // Send message
-                    messageQueues.get(index).get(req.v.hashCode() % SSSP.numThreads).add(req);
+                    messageQueues.get(req.v.hashCode() % SSSP.numThreads).add(req);
                 }
 
                 // wait until other threads also reach here
@@ -759,14 +756,11 @@ class Surface {
         }
         bucketsArr.get(0).get(0).add(vertices[0]);
 
-        // allocate 2-D concurrent queue
+        // allocate concurrent queue by thread num
         messageQueues = new ArrayList<>();
         for (int i = 0; i < SSSP.numThreads; i++) {
-            ArrayList<ConcurrentLinkedQueue<Request>> mq_1d = new ArrayList<>();
-            for (int j = 0; j < SSSP.numThreads; j++) {
-                mq_1d.add(new ConcurrentLinkedQueue<>());
-            }
-            messageQueues.add(mq_1d);
+            ConcurrentLinkedQueue<Request> mq = new ConcurrentLinkedQueue<>();
+            messageQueues.add(mq);
         }
 
         int i = 0;
