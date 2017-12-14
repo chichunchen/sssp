@@ -652,17 +652,6 @@ class Surface {
         return rtn;
     }
 
-    LinkedList<Request> findRequests(Collection<Vertex> bucket) {
-        LinkedList<Request> rtn = new LinkedList<Request>();
-        for (Vertex v : bucket) {
-            for (Edge e : v.neighbors) {
-                Vertex o = e.other(v);
-                rtn.add(new Request(o, e));
-            }
-        }
-        return rtn;
-    }
-
     // This class is for speed up delta-stepping algorithm
     class ConcurrentRelax implements Runnable {
         private CyclicBarrier barrier;
@@ -710,8 +699,8 @@ class Surface {
                     } catch (InterruptedException | BrokenBarrierException e) {
                         e.printStackTrace();
                     }
-                    // receive from msg queue
-                    // get from mq[sender][receiver]
+
+                    // try to relax all the requests in message queue
                     ConcurrentLinkedQueue<Request> concurrentLinkedQueue = messageQueues.get(tid);
                     while (!concurrentLinkedQueue.isEmpty()) {
                         // get and delete from mq
@@ -721,12 +710,6 @@ class Surface {
                         } catch(Coordinator.KilledException e) { }
                     }
 
-//                    try {
-//                        barrier.await();
-//                    } catch (InterruptedException | BrokenBarrierException e) {
-//                        e.printStackTrace();
-//                    }
-
                     requests = findRequests(buckets.get(progress), true);
                     // Move all vertices from bucket i to removed list.
                     removed.addAll(buckets.get(progress));
@@ -735,19 +718,12 @@ class Surface {
                         messageQueues.get(req.v.hashCode() % SSSP.numThreads).add(req);
                     }
 
-                    // wait until other threads also reach here
                     try {
                         barrier.await();
                     } catch (InterruptedException | BrokenBarrierException e) {
                         e.printStackTrace();
                     }
                 } while (!checkAllMQisEmpty());
-
-//                try {
-//                    barrier.await();
-//                } catch (InterruptedException | BrokenBarrierException e) {
-//                    e.printStackTrace();
-//                }
 
                 // Now bucket i is empty.
                 requests = findRequests(removed, false);    // heavy relaxations
