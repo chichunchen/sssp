@@ -32,6 +32,7 @@ public class SSSP {
     private static long sd = 0;             // default random number seed
     public static int numThreads = 0;       // zero means use Dijkstra's alg;
                                             // positive means use Delta stepping
+    public static int delta = -1;           // delta value for Delta stepping
 
     private static final int TIMING_ONLY    = 0;
     private static final int PRINT_EVENTS   = 1;
@@ -53,7 +54,8 @@ public class SSSP {
           + "-s <random number seed>\n"
           + "-t <number of threads>\n"
           + "    (0 means use Dijkstra's algorithm on one thread)\n"
-          + "-v  (print this message)\n";
+          + "-v  (print this message)\n"
+          + "-D <configure delta manually>\n";
 
     // Examine command-line arguments for alternative running modes.
     //
@@ -147,6 +149,16 @@ public class SSSP {
             } else if (args[i].equals("-v")) {
                 System.err.print(help);
                 System.exit(0);
+            } else if (args[i].equals("-D")) {
+                if (++i >= args.length) {
+                    System.err.print("Missing delta\n");
+                } else {
+                    try {
+                        delta = Integer.parseInt(args[i]);
+                    } catch (NumberFormatException e) {
+                        System.err.printf("Delta (%D) must be a double\n", args[i]);
+                    }
+                }
             } else {
                 System.err.printf("Unexpected argument: %s\n", args[i]);
                 System.err.print(help);
@@ -676,7 +688,7 @@ class Surface {
 
         @Override
         public void run() {
-            LinkedList<Vertex> removed = new LinkedList<Vertex>();
+            LinkedList<Vertex> removed = new LinkedList<>();
             LinkedList<Request> requests;
             do {
                 try {
@@ -740,7 +752,12 @@ class Surface {
     //
     public void DeltaSolve() throws Coordinator.KilledException {
         numBuckets = 2 * degree;
-        delta = maxCoord / degree;
+        // if delta has been manually configured
+        if (delta == -1)
+            delta = maxCoord / degree;
+        else {
+            numBuckets = maxCoord * 2 / delta;
+        }
         // All buckets, together, cover a range of 2 * maxCoord,
         // which is larger than the weight of any edge, so a relaxation
         // will never wrap all the way around the array.
@@ -783,15 +800,6 @@ class Surface {
             if (i == numBuckets-1)
                 break;
             i++;
-//            int j = i;
-//            do {
-//                j = (j + 1) % numBuckets;
-//            } while (j != i && bucketsArr.get(0).get(j).size() == 0);
-//            if (i == j) {
-//                // Cycled all the way around; we're done
-//                break;  // for (;;) loop
-//            }
-//            i = j;
         }
     }
 
@@ -812,6 +820,9 @@ class Surface {
         edges = new Vector<Edge>();
 
         prn = new Random();
+
+        delta = SSSP.delta;
+
         reset();
     }
 }
