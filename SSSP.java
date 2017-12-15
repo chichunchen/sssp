@@ -786,7 +786,12 @@ class Surface {
         if (delta == -1)
             delta = maxCoord / degree;
         else {
-            numBuckets = maxCoord * 2 / delta;
+			int dividend = maxCoord * 2;
+            // size of buckets should not be 0 even the delta is very large
+            if (delta > dividend)
+                numBuckets = 1;
+            else
+                numBuckets = dividend / delta;
         }
 
         // All buckets, together, cover a range of 2 * maxCoord,
@@ -817,7 +822,8 @@ class Surface {
 
         // start running parallelized delta-stepping
         for (int t = 0; t < numThreads; t++) {
-            threads[t] = new Thread(new ConcurrentRelax(t,  cb));
+			System.out.println("t: " + t);
+            threads[t] = new Thread(new ConcurrentRelax(t, cb));
             threads[t].start();
         }
 

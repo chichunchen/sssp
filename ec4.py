@@ -1,11 +1,12 @@
 import subprocess
 import sys
 
+# run 1, 48
 d = sys.argv[1]
 t = sys.argv[2]
 s = sys.argv[3]
 
-N = [10, 50, 100, 500, 1000, 5000, 10000, 50000, 100000, 500000, 1000000, 5000000]
+N = [200000, 300000, 400000, 600000, 700000, 800000, 900000]
 
 for n in N:
 	res = subprocess.run(['java', 'SSSP', '-a', '0', '-t', t, '-n', str(n), '-d', d], stdout = subprocess.PIPE)
